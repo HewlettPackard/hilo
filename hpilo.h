@@ -175,11 +175,11 @@ struct fifo {
 	u64 tail;
 	u8  pad_2[ILO_CACHE_SZ - (sizeof(u64))];
 
-	u64 fifobar[];
+	u64 fifobar[1];
 };
 
 /* convert between struct fifo, and the fifobar, which is saved in the ccb */
-#define FIFOHANDLESIZE (sizeof(struct fifo))
+#define FIFOHANDLESIZE (sizeof(struct fifo) - sizeof(u64))
 #define FIFOBARTOHANDLE(_fifo) \
 	((struct fifo *)(((char *)(_fifo)) - FIFOHANDLESIZE))
 
