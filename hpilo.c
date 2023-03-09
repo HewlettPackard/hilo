@@ -3,7 +3,7 @@
  * Driver for the HP iLO management processor.
  *
  * Copyright (C) 2008 Hewlett-Packard Development Company, L.P.
- *	David Altobelli <david.altobelli@hpe.com>
+ *	David Altobelli <david.altobelli@hp.com>
  */
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -923,7 +923,7 @@ static void __exit ilo_exit(void)
 MODULE_VERSION("1.5.0");
 MODULE_ALIAS(ILO_NAME);
 MODULE_DESCRIPTION(ILO_NAME);
-MODULE_AUTHOR("David Altobelli <david.altobelli@hpe.com>");
+MODULE_AUTHOR("David Altobelli <david.altobelli@hp.com>");
 MODULE_LICENSE("GPL v2");
 
 module_param(max_ccb, uint, 0444);
