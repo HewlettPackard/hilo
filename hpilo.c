@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
  * Driver for the HP iLO management processor.
  *
@@ -923,7 +923,7 @@ MODULE_VERSION("1.5.0");
 MODULE_ALIAS(ILO_NAME);
 MODULE_DESCRIPTION(ILO_NAME);
 MODULE_AUTHOR("David Altobelli <david.altobelli@hp.com>");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("Dual MIT/GPL");
 
 module_param(max_ccb, uint, 0444);
 MODULE_PARM_DESC(max_ccb, "Maximum number of HP iLO channels to attach (16)");
