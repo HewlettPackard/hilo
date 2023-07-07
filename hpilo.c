@@ -525,9 +525,9 @@ static __poll_t ilo_poll(struct file *fp, poll_table *wait)
 	poll_wait(fp, &data->ccb_waitq, wait);
 
 	if (is_channel_reset(driver_ccb))
-		return EPOLLERR;
+		return POLLERR;
 	else if (ilo_pkt_recv(data->ilo_hw, driver_ccb))
-		return EPOLLIN | EPOLLRDNORM;
+		return POLLIN | POLLRDNORM;
 
 	return 0;
 }
