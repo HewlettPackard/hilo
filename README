@@ -1,0 +1,17 @@
+This repository is for dual licensing the Linux hplio driver to 
+'GPL-2.0 OR MIT'.
+
+All patches without the authors' approval to re-license under MIT license
+have been reverted. Please refer to git log for details.
+
+The following is the list of non-HPE authors that agree to the dual licensing:
+
+* Al Viro	<viro@zeniv.linux.org.uk>
+* Alexey Dobriyan	<adobriyan@gmail.com>
+* Arvind Yadav	<arvind.yadav.cs@gmail.com>
+* Bill Pemberton	<wfp5p@virginia.edu>
+* Christophe Jaillet	<christophe.jaillet@wanadoo.fr>
+* Dhaval Shah	<dhaval.experiance@gmail.com>
+* Jiri Slaby	<jslaby@suse.cz>
+* Prarit Bhargava	<prarit@redhat.com>
+* Tejun Heo	<tj@kernel.org>
