@@ -126,7 +126,7 @@ static int fifo_check_recv(struct ilo_hwinfo *hw, char *fifobar)
 	return ret;
 }
 
-static int ilo_pkt_enqueue(struct ilo_hwinfo *hw, struct ccb *ccb,
+static int ilo_pkt_enqueue(struct ilo_hwinfo *hw, struct ilo_ccb *ccb,
 			   int dir, int id, int len)
 {
 	char *fifobar;
@@ -141,7 +141,7 @@ static int ilo_pkt_enqueue(struct ilo_hwinfo *hw, struct ccb *ccb,
 	return fifo_enqueue(hw, fifobar, entry);
 }
 
-static int ilo_pkt_dequeue(struct ilo_hwinfo *hw, struct ccb *ccb,
+static int ilo_pkt_dequeue(struct ilo_hwinfo *hw, struct ilo_ccb *ccb,
 			   int dir, int *id, int *len, void **pkt)
 {
 	char *fifobar, *desc;
@@ -170,19 +170,19 @@ static int ilo_pkt_dequeue(struct ilo_hwinfo *hw, struct ccb *ccb,
 	return ret;
 }
 
-static int ilo_pkt_recv(struct ilo_hwinfo *hw, struct ccb *ccb)
+static int ilo_pkt_recv(struct ilo_hwinfo *hw, struct ilo_ccb *ccb)
 {
 	char *fifobar = ccb->ccb_u3.recv_fifobar;
 
 	return fifo_check_recv(hw, fifobar);
 }
 
-static inline void doorbell_set(struct ccb *ccb)
+static inline void doorbell_set(struct ilo_ccb *ccb)
 {
 	iowrite8(1, ccb->ccb_u5.db_base);
 }
 
-static inline void doorbell_clr(struct ccb *ccb)
+static inline void doorbell_clr(struct ilo_ccb *ccb)
 {
 	iowrite8(2, ccb->ccb_u5.db_base);
 }
@@ -197,7 +197,7 @@ static inline int ctrl_set(int l2sz, int idxmask, int desclim)
 	       go << CTRL_BITPOS_G;
 }
 
-static void ctrl_setup(struct ccb *ccb, int nr_desc, int l2desc_sz)
+static void ctrl_setup(struct ilo_ccb *ccb, int nr_desc, int l2desc_sz)
 {
 	/* for simplicity, use the same parameters for send and recv ctrls */
 	ccb->send_ctrl = ctrl_set(l2desc_sz, nr_desc-1, nr_desc-1);
@@ -229,8 +229,8 @@ static void fifo_setup(void *base_addr, int nr_entry)
 
 static void ilo_ccb_close(struct pci_dev *pdev, struct ccb_data *data)
 {
-	struct ccb *driver_ccb = &data->driver_ccb;
-	struct ccb __iomem *device_ccb = data->mapped_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb __iomem *device_ccb = data->mapped_ccb;
 	int retries;
 
 	/* complicated dance to tell the hw we are stopping */
@@ -253,7 +253,7 @@ static void ilo_ccb_close(struct pci_dev *pdev, struct ccb_data *data)
 		dev_err(&pdev->dev, "Closing, but controller still active\n");
 
 	/* clear the hw ccb */
-	memset_io(device_ccb, 0, sizeof(struct ccb));
+	memset_io(device_ccb, 0, sizeof(struct ilo_ccb));
 
 	/* free resources used to back send/recv queues */
 	dma_free_coherent(&pdev->dev, data->dma_size, data->dma_va,
@@ -264,7 +264,7 @@ static int ilo_ccb_setup(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 {
 	char *dma_va;
 	dma_addr_t dma_pa;
-	struct ccb *driver_ccb, *ilo_ccb;
+	struct ilo_ccb *driver_ccb, *ilo_ccb;
 
 	driver_ccb = &data->driver_ccb;
 	ilo_ccb = &data->ilo_ccb;
@@ -326,12 +326,12 @@ static int ilo_ccb_setup(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 static void ilo_ccb_open(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 {
 	int pkt_id, pkt_sz;
-	struct ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
 
 	/* copy the ccb with physical addrs to device memory */
-	data->mapped_ccb = (struct ccb __iomem *)
+	data->mapped_ccb = (struct ilo_ccb __iomem *)
 				(hw->ram_vaddr + (slot * ILOHW_CCB_SZ));
-	memcpy_toio(data->mapped_ccb, &data->ilo_ccb, sizeof(struct ccb));
+	memcpy_toio(data->mapped_ccb, &data->ilo_ccb, sizeof(struct ilo_ccb));
 
 	/* put packets on the send and receive queues */
 	pkt_sz = 0;
@@ -351,7 +351,7 @@ static void ilo_ccb_open(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 static int ilo_ccb_verify(struct ilo_hwinfo *hw, struct ccb_data *data)
 {
 	int pkt_id, i;
-	struct ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
 
 	/* make sure iLO is really handling requests */
 	for (i = MAX_WAIT; i > 0; i--) {
@@ -370,13 +370,13 @@ static int ilo_ccb_verify(struct ilo_hwinfo *hw, struct ccb_data *data)
 	return 0;
 }
 
-static inline int is_channel_reset(struct ccb *ccb)
+static inline int is_channel_reset(struct ilo_ccb *ccb)
 {
 	/* check for this particular channel needing a reset */
 	return FIFOBARTOHANDLE(ccb->ccb_u1.send_fifobar)->reset;
 }
 
-static inline void set_channel_reset(struct ccb *ccb)
+static inline void set_channel_reset(struct ilo_ccb *ccb)
 {
 	/* set a flag indicating this channel needs a reset */
 	FIFOBARTOHANDLE(ccb->ccb_u1.send_fifobar)->reset = 1;
@@ -440,7 +440,7 @@ static ssize_t ilo_read(struct file *fp, char __user *buf,
 {
 	int err, found, cnt, pkt_id, pkt_len;
 	struct ccb_data *data = fp->private_data;
-	struct ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
 	struct ilo_hwinfo *hw = data->ilo_hw;
 	void *pkt;
 
@@ -490,7 +490,7 @@ static ssize_t ilo_write(struct file *fp, const char __user *buf,
 {
 	int err, pkt_id, pkt_len;
 	struct ccb_data *data = fp->private_data;
-	struct ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
 	struct ilo_hwinfo *hw = data->ilo_hw;
 	void *pkt;
 
@@ -520,7 +520,7 @@ static ssize_t ilo_write(struct file *fp, const char __user *buf,
 static __poll_t ilo_poll(struct file *fp, poll_table *wait)
 {
 	struct ccb_data *data = fp->private_data;
-	struct ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
 
 	poll_wait(fp, &data->ccb_waitq, wait);
 

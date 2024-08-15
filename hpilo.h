@@ -78,7 +78,7 @@ struct ilo_hwinfo {
  */
 #define ILOSW_CCB_SZ	64
 #define ILOHW_CCB_SZ 	128
-struct ccb {
+struct ilo_ccb {
 	union {
 		char *send_fifobar;
 		u64 send_fifobar_pa;
@@ -131,13 +131,13 @@ struct ccb {
  */
 struct ccb_data {
 	/* software version of ccb, using virtual addrs */
-	struct ccb  driver_ccb;
+	struct ilo_ccb  driver_ccb;
 
 	/* hardware version of ccb, using physical addrs */
-	struct ccb  ilo_ccb;
+	struct ilo_ccb  ilo_ccb;
 
 	/* hardware ccb is written to this shared mapped device memory */
-	struct ccb __iomem *mapped_ccb;
+	struct ilo_ccb __iomem *mapped_ccb;
 
 	/* dma'able memory used for send/recv queues */
 	void       *dma_va;
