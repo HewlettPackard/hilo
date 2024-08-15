@@ -684,9 +684,9 @@ static irqreturn_t ilo_isr(int irq, void *data)
 
 static void ilo_unmap_device(struct pci_dev *pdev, struct ilo_hwinfo *hw)
 {
-	pci_iounmap(pdev, hw->db_vaddr);
-	pci_iounmap(pdev, hw->ram_vaddr);
-	pci_iounmap(pdev, hw->mmio_vaddr);
+	hpilo_pci_iounmap(pdev, hw->db_vaddr);
+	hpilo_pci_iounmap(pdev, hw->ram_vaddr);
+	hpilo_pci_iounmap(pdev, hw->mmio_vaddr);
 }
 
 static int ilo_map_device(struct pci_dev *pdev, struct ilo_hwinfo *hw)
@@ -697,7 +697,7 @@ static int ilo_map_device(struct pci_dev *pdev, struct ilo_hwinfo *hw)
 	int rc;
 
 	/* map the memory mapped i/o registers */
-	hw->mmio_vaddr = pci_iomap(pdev, 1, 0);
+	hw->mmio_vaddr = hpilo_pci_iomap(pdev, 1, 0);
 	if (hw->mmio_vaddr == NULL) {
 		dev_err(&pdev->dev, "Error mapping mmio\n");
 		goto out;
@@ -725,7 +725,7 @@ static int ilo_map_device(struct pci_dev *pdev, struct ilo_hwinfo *hw)
 	}
 
 	/* map the doorbell aperture */
-	hw->db_vaddr = pci_iomap(pdev, 3, max_ccb * ONE_DB_SIZE);
+	hw->db_vaddr = hpilo_pci_iomap(pdev, 3, max_ccb * ONE_DB_SIZE);
 	if (hw->db_vaddr == NULL) {
 		dev_err(&pdev->dev, "Error mapping doorbell\n");
 		goto ram_free;
@@ -733,9 +733,9 @@ static int ilo_map_device(struct pci_dev *pdev, struct ilo_hwinfo *hw)
 
 	return 0;
 ram_free:
-	pci_iounmap(pdev, hw->ram_vaddr);
+	hpilo_pci_iounmap(pdev, hw->ram_vaddr);
 mmio_free:
-	pci_iounmap(pdev, hw->mmio_vaddr);
+	hpilo_pci_iounmap(pdev, hw->mmio_vaddr);
 out:
 	return -ENOMEM;
 }
@@ -884,10 +884,10 @@ static int ilo_probe(struct pci_dev *pdev,
 
 	for (minor = 0 ; minor < max_ccb; minor++) {
 		error = hpilo_add_cdev(ilo_hw, devnum, minor);
-	if (error) {
+		if (error) {
 			dev_err(&pdev->dev, "Could not add cdev %d\n", minor);
 			goto remove_dev;
-	}
+		}
 	}
 
 	return 0;

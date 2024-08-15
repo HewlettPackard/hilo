@@ -30,12 +30,31 @@ pci_match_id(const struct pci_device_id *ids, struct pci_dev *dev)
 }
 
 static inline void *
+hpilo_pci_iomap(struct pci_dev *dev, int mmio_bar, int mmio_size __unused)
+{
+	unsigned long addr, len;
+
+	addr = pci_resource_start(dev, mmio_bar);
+	len = pci_resource_len(dev, mmio_bar);
+	if (!addr)
+		return NULL;
+
+	return ioremap(addr, len);
+}
+
+static inline void
+hpilo_pci_iounmap(struct pci_dev *dev, void *res)
+{
+	iounmap(res);
+}
+
+static inline void *
 pci_iomap_range(struct pci_dev *dev, int bar, unsigned long offset,
 		unsigned long maxlen)
 {
 	void *vaddr;
 
-	vaddr = pci_iomap(dev, bar, maxlen);
+	vaddr = hpilo_pci_iomap(dev, bar, maxlen);
 	if (vaddr)
 		vaddr = (caddr_t)vaddr + offset;
 	return vaddr;
