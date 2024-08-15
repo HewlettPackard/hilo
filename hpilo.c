@@ -11,7 +11,6 @@
 #include <linux/fs.h>
 #include <linux/pci.h>
 #include <linux/interrupt.h>
-#include <linux/ioport.h>
 #include <linux/device.h>
 #include <linux/file.h>
 #include <linux/cdev.h>
@@ -24,6 +23,7 @@
 #include <linux/poll.h>
 #include <linux/slab.h>
 #include "hpilo.h"
+#include "hpilo_port.h"
 
 static struct class *ilo_class;
 static unsigned int ilo_major;
@@ -919,7 +919,7 @@ static void __exit ilo_exit(void)
 	class_destroy(ilo_class);
 }
 
-MODULE_VERSION("1.5.0");
+// MODULE_VERSION("1.5.0");
 MODULE_ALIAS(ILO_NAME);
 MODULE_DESCRIPTION(ILO_NAME);
 MODULE_AUTHOR("David Altobelli <david.altobelli@hp.com>");
