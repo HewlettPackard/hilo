@@ -265,6 +265,7 @@ static int ilo_ccb_setup(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 	char *dma_va;
 	dma_addr_t dma_pa;
 	struct ilo_ccb *driver_ccb, *ilo_ccb;
+	int err;
 
 	driver_ccb = &data->driver_ccb;
 	ilo_ccb = &data->ilo_ccb;
@@ -272,6 +273,12 @@ static int ilo_ccb_setup(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 	data->dma_size = 2 * fifo_sz(NR_QENTRY) +
 			 2 * desc_mem_sz(NR_QENTRY) +
 			 ILO_START_ALIGN + ILO_CACHE_SZ;
+
+	err = dma_set_mask(&hw->ilo_dev->dev, 0xffffffffUL);
+	if (err) {
+		dev_err(&hw->ilo_dev->dev, "Could not set dma mask:%d\n", err);
+		return err;
+	}
 
 	data->dma_va = dma_alloc_coherent(&hw->ilo_dev->dev, data->dma_size,
 					  &data->dma_pa, GFP_ATOMIC);
