@@ -1,0 +1,18 @@
+We have developed patches for the hpilo driver so that it will compile as an
+"out of tree" driver on FreeBSD 13 & 14.
+
+It will load and with the help of linux compatibility models, ilorest runs
+nicely. We are able to interact with ilo and bios settings, as well as upgrade
+the systems firwmare.
+
+Thanks to HPE, this is dual licensed so others can build on this work and
+polish it for easier use.
+
+# Linux compatibility layer. Needed for ilorest
+mkdir -p /compat/linux/proc
+mount -t linprocfs linprocfs /compat/linux/proc
+mkdir -p /compat/linux/sys
+mount -t linsysfs linsysfs /compat/linux/sys
+mkdir -p /compat/linux/dev/shm
+mount -t tmpfs tmpfs /compat/linux/dev/shm
+touch /compat/linux/etc/ld.so.cache
