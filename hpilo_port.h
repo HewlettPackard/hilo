@@ -41,4 +41,13 @@ pci_iomap_range(struct pci_dev *dev, int bar, unsigned long offset,
 	return vaddr;
 }
 
+static inline int
+hpilo_make_dev(struct make_dev_args *args, struct cdev *ptr, char *name)
+{
+#pragma push_macro("cdev")
+#undef cdev
+	return make_dev_s(args, &ptr->cdev, "%s", name);
+#pragma pop_macro("cdev")
+}
+
 MODULE_DEPEND(hpilo, linuxkpi, 1, 1, 1);

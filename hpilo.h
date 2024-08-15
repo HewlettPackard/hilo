@@ -61,7 +61,7 @@ struct ilo_hwinfo {
 	spinlock_t alloc_lock;
 	spinlock_t fifo_lock;
 
-	struct cdev cdev;
+	struct cdev cdev[MAX_CCB];
 };
 
 /* offset from mmio_vaddr for enabling doorbell interrupts */

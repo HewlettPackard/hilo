@@ -541,7 +541,7 @@ static int ilo_close(struct inode *ip, struct file *fp)
 	unsigned long flags;
 
 	slot = iminor(ip) % max_ccb;
-	hw = container_of(ip->i_cdev, struct ilo_hwinfo, cdev);
+	hw = container_of(fp->f_cdev, struct ilo_hwinfo, cdev[slot]);
 
 	spin_lock(&hw->open_lock);
 
@@ -572,7 +572,7 @@ static int ilo_open(struct inode *ip, struct file *fp)
 	unsigned long flags;
 
 	slot = iminor(ip) % max_ccb;
-	hw = container_of(ip->i_cdev, struct ilo_hwinfo, cdev);
+	hw = container_of(fp->f_cdev, struct ilo_hwinfo, cdev[slot]);
 
 	/* new ccb allocation */
 	data = kzalloc(sizeof(*data), GFP_KERNEL);
@@ -740,21 +740,33 @@ out:
 	return -ENOMEM;
 }
 
+static void
+hpilo_remove_cdevs(struct ilo_hwinfo *ilo_hw)
+{
+	struct cdev *cdev;
+	int minor;
+
+	for (minor = 0 ; minor < max_ccb; minor++) {
+		cdev = &ilo_hw->cdev[minor];
+		if (!cdev->dev)
+			continue;
+		cdev_del(cdev);
+	}
+}
+
 static void ilo_remove(struct pci_dev *pdev)
 {
-	int i, minor;
 	struct ilo_hwinfo *ilo_hw = pci_get_drvdata(pdev);
+	int devnum;
 
 	if (!ilo_hw)
 		return;
 
 	clear_device(ilo_hw);
 
-	minor = MINOR(ilo_hw->cdev.dev);
-	for (i = minor; i < minor + max_ccb; i++)
-		device_destroy(ilo_class, MKDEV(ilo_major, i));
+	devnum = MINOR(ilo_hw->cdev[0].dev) / max_ccb;
 
-	cdev_del(&ilo_hw->cdev);
+	hpilo_remove_cdevs(ilo_hw);
 	ilo_disable_interrupts(ilo_hw);
 	free_irq(pdev->irq, ilo_hw);
 	ilo_unmap_device(pdev, ilo_hw);
@@ -768,13 +780,49 @@ static void ilo_remove(struct pci_dev *pdev)
 	 * yet. See acpi_pci_link_free_irq called from acpi_pci_irq_disable.
 	 */
 	kfree(ilo_hw);
-	ilo_hwdev[(minor / max_ccb)] = 0;
+	ilo_hwdev[devnum] = 0;
+}
+
+static int
+hpilo_add_cdev(struct ilo_hwinfo *ilo_hw, int devnum, int minor)
+{
+	struct make_dev_args args;
+	struct cdev *cdev;
+	char buffer[32];
+	int error;
+
+	cdev = &ilo_hw->cdev[minor];
+	if (cdev->dev)
+		return -EALREADY;
+
+	cdev_init(cdev, &ilo_fops);
+	cdev->owner = THIS_MODULE;
+
+	cdev->dev = MKDEV(ilo_major, devnum * max_ccb + minor);
+
+	/* Setup arguments for make_dev_s() */
+	make_dev_args_init(&args);
+	args.mda_devsw = &linuxcdevsw;
+	args.mda_uid = 0;
+	args.mda_gid = 0;
+	args.mda_mode = 0700;
+	args.mda_si_drv1 = cdev;	/* linux_dev_fdopen() expects a cdev */
+
+	sprintf(buffer, "hpilo/d%dccb%d", devnum, minor);
+	error = hpilo_make_dev(&args, cdev, buffer);
+	if (error) {
+		cdev->dev = 0;
+		return -error;
+	}
+
+	kobject_get(cdev->kobj.parent);
+	return 0;
 }
 
 static int ilo_probe(struct pci_dev *pdev,
 			       const struct pci_device_id *ent)
 {
-	int devnum, minor, start, error = 0;
+	int devnum, minor, error = 0;
 	struct ilo_hwinfo *ilo_hw;
 
 	if (pci_match_id(ilo_blacklist, pdev)) {
@@ -834,26 +882,18 @@ static int ilo_probe(struct pci_dev *pdev,
 
 	ilo_enable_interrupts(ilo_hw);
 
-	cdev_init(&ilo_hw->cdev, &ilo_fops);
-	ilo_hw->cdev.owner = THIS_MODULE;
-	start = devnum * max_ccb;
-	error = cdev_add(&ilo_hw->cdev, MKDEV(ilo_major, start), max_ccb);
-	if (error) {
-		dev_err(&pdev->dev, "Could not add cdev\n");
-		goto remove_isr;
-	}
-
 	for (minor = 0 ; minor < max_ccb; minor++) {
-		struct device *dev;
-		dev = device_create(ilo_class, &pdev->dev,
-				    MKDEV(ilo_major, minor), NULL,
-				    "hpilo!d%dccb%d", devnum, minor);
-		if (IS_ERR(dev))
-			dev_err(&pdev->dev, "Could not create files\n");
+		error = hpilo_add_cdev(ilo_hw, devnum, minor);
+	if (error) {
+			dev_err(&pdev->dev, "Could not add cdev %d\n", minor);
+			goto remove_dev;
+	}
 	}
 
 	return 0;
-remove_isr:
+
+remove_dev:
+	hpilo_remove_cdevs(ilo_hw);
 	ilo_disable_interrupts(ilo_hw);
 	free_irq(pdev->irq, ilo_hw);
 unmap:
