@@ -11,7 +11,6 @@
 #include <linux/fs.h>
 #include <linux/pci.h>
 #include <linux/interrupt.h>
-#include <linux/ioport.h>
 #include <linux/device.h>
 #include <linux/file.h>
 #include <linux/cdev.h>
@@ -24,6 +23,7 @@
 #include <linux/poll.h>
 #include <linux/slab.h>
 #include "hpilo.h"
+#include "hpilo_port.h"
 
 static struct class *ilo_class;
 static unsigned int ilo_major;
@@ -126,7 +126,7 @@ static int fifo_check_recv(struct ilo_hwinfo *hw, char *fifobar)
 	return ret;
 }
 
-static int ilo_pkt_enqueue(struct ilo_hwinfo *hw, struct ccb *ccb,
+static int ilo_pkt_enqueue(struct ilo_hwinfo *hw, struct ilo_ccb *ccb,
 			   int dir, int id, int len)
 {
 	char *fifobar;
@@ -141,7 +141,7 @@ static int ilo_pkt_enqueue(struct ilo_hwinfo *hw, struct ccb *ccb,
 	return fifo_enqueue(hw, fifobar, entry);
 }
 
-static int ilo_pkt_dequeue(struct ilo_hwinfo *hw, struct ccb *ccb,
+static int ilo_pkt_dequeue(struct ilo_hwinfo *hw, struct ilo_ccb *ccb,
 			   int dir, int *id, int *len, void **pkt)
 {
 	char *fifobar, *desc;
@@ -170,19 +170,19 @@ static int ilo_pkt_dequeue(struct ilo_hwinfo *hw, struct ccb *ccb,
 	return ret;
 }
 
-static int ilo_pkt_recv(struct ilo_hwinfo *hw, struct ccb *ccb)
+static int ilo_pkt_recv(struct ilo_hwinfo *hw, struct ilo_ccb *ccb)
 {
 	char *fifobar = ccb->ccb_u3.recv_fifobar;
 
 	return fifo_check_recv(hw, fifobar);
 }
 
-static inline void doorbell_set(struct ccb *ccb)
+static inline void doorbell_set(struct ilo_ccb *ccb)
 {
 	iowrite8(1, ccb->ccb_u5.db_base);
 }
 
-static inline void doorbell_clr(struct ccb *ccb)
+static inline void doorbell_clr(struct ilo_ccb *ccb)
 {
 	iowrite8(2, ccb->ccb_u5.db_base);
 }
@@ -197,7 +197,7 @@ static inline int ctrl_set(int l2sz, int idxmask, int desclim)
 	       go << CTRL_BITPOS_G;
 }
 
-static void ctrl_setup(struct ccb *ccb, int nr_desc, int l2desc_sz)
+static void ctrl_setup(struct ilo_ccb *ccb, int nr_desc, int l2desc_sz)
 {
 	/* for simplicity, use the same parameters for send and recv ctrls */
 	ccb->send_ctrl = ctrl_set(l2desc_sz, nr_desc-1, nr_desc-1);
@@ -229,8 +229,8 @@ static void fifo_setup(void *base_addr, int nr_entry)
 
 static void ilo_ccb_close(struct pci_dev *pdev, struct ccb_data *data)
 {
-	struct ccb *driver_ccb = &data->driver_ccb;
-	struct ccb __iomem *device_ccb = data->mapped_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb __iomem *device_ccb = data->mapped_ccb;
 	int retries;
 
 	/* complicated dance to tell the hw we are stopping */
@@ -253,7 +253,7 @@ static void ilo_ccb_close(struct pci_dev *pdev, struct ccb_data *data)
 		dev_err(&pdev->dev, "Closing, but controller still active\n");
 
 	/* clear the hw ccb */
-	memset_io(device_ccb, 0, sizeof(struct ccb));
+	memset_io(device_ccb, 0, sizeof(struct ilo_ccb));
 
 	/* free resources used to back send/recv queues */
 	dma_free_coherent(&pdev->dev, data->dma_size, data->dma_va,
@@ -264,7 +264,8 @@ static int ilo_ccb_setup(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 {
 	char *dma_va;
 	dma_addr_t dma_pa;
-	struct ccb *driver_ccb, *ilo_ccb;
+	struct ilo_ccb *driver_ccb, *ilo_ccb;
+	int err;
 
 	driver_ccb = &data->driver_ccb;
 	ilo_ccb = &data->ilo_ccb;
@@ -272,6 +273,12 @@ static int ilo_ccb_setup(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 	data->dma_size = 2 * fifo_sz(NR_QENTRY) +
 			 2 * desc_mem_sz(NR_QENTRY) +
 			 ILO_START_ALIGN + ILO_CACHE_SZ;
+
+	err = dma_set_mask(&hw->ilo_dev->dev, 0xffffffffUL);
+	if (err) {
+		dev_err(&hw->ilo_dev->dev, "Could not set dma mask:%d\n", err);
+		return err;
+	}
 
 	data->dma_va = dma_alloc_coherent(&hw->ilo_dev->dev, data->dma_size,
 					  &data->dma_pa, GFP_ATOMIC);
@@ -326,12 +333,12 @@ static int ilo_ccb_setup(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 static void ilo_ccb_open(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 {
 	int pkt_id, pkt_sz;
-	struct ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
 
 	/* copy the ccb with physical addrs to device memory */
-	data->mapped_ccb = (struct ccb __iomem *)
+	data->mapped_ccb = (struct ilo_ccb __iomem *)
 				(hw->ram_vaddr + (slot * ILOHW_CCB_SZ));
-	memcpy_toio(data->mapped_ccb, &data->ilo_ccb, sizeof(struct ccb));
+	memcpy_toio(data->mapped_ccb, &data->ilo_ccb, sizeof(struct ilo_ccb));
 
 	/* put packets on the send and receive queues */
 	pkt_sz = 0;
@@ -351,7 +358,7 @@ static void ilo_ccb_open(struct ilo_hwinfo *hw, struct ccb_data *data, int slot)
 static int ilo_ccb_verify(struct ilo_hwinfo *hw, struct ccb_data *data)
 {
 	int pkt_id, i;
-	struct ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
 
 	/* make sure iLO is really handling requests */
 	for (i = MAX_WAIT; i > 0; i--) {
@@ -370,13 +377,13 @@ static int ilo_ccb_verify(struct ilo_hwinfo *hw, struct ccb_data *data)
 	return 0;
 }
 
-static inline int is_channel_reset(struct ccb *ccb)
+static inline int is_channel_reset(struct ilo_ccb *ccb)
 {
 	/* check for this particular channel needing a reset */
 	return FIFOBARTOHANDLE(ccb->ccb_u1.send_fifobar)->reset;
 }
 
-static inline void set_channel_reset(struct ccb *ccb)
+static inline void set_channel_reset(struct ilo_ccb *ccb)
 {
 	/* set a flag indicating this channel needs a reset */
 	FIFOBARTOHANDLE(ccb->ccb_u1.send_fifobar)->reset = 1;
@@ -390,12 +397,6 @@ static inline int get_device_outbound(struct ilo_hwinfo *hw)
 static inline int is_db_reset(int db_out)
 {
 	return db_out & (1 << DB_RESET);
-}
-
-static inline int is_device_reset(struct ilo_hwinfo *hw)
-{
-	/* check for global reset condition */
-	return is_db_reset(get_device_outbound(hw));
 }
 
 static inline void clear_pending_db(struct ilo_hwinfo *hw, int clr)
@@ -440,7 +441,7 @@ static ssize_t ilo_read(struct file *fp, char __user *buf,
 {
 	int err, found, cnt, pkt_id, pkt_len;
 	struct ccb_data *data = fp->private_data;
-	struct ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
 	struct ilo_hwinfo *hw = data->ilo_hw;
 	void *pkt;
 
@@ -490,7 +491,7 @@ static ssize_t ilo_write(struct file *fp, const char __user *buf,
 {
 	int err, pkt_id, pkt_len;
 	struct ccb_data *data = fp->private_data;
-	struct ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
 	struct ilo_hwinfo *hw = data->ilo_hw;
 	void *pkt;
 
@@ -520,7 +521,7 @@ static ssize_t ilo_write(struct file *fp, const char __user *buf,
 static __poll_t ilo_poll(struct file *fp, poll_table *wait)
 {
 	struct ccb_data *data = fp->private_data;
-	struct ccb *driver_ccb = &data->driver_ccb;
+	struct ilo_ccb *driver_ccb = &data->driver_ccb;
 
 	poll_wait(fp, &data->ccb_waitq, wait);
 
@@ -540,7 +541,7 @@ static int ilo_close(struct inode *ip, struct file *fp)
 	unsigned long flags;
 
 	slot = iminor(ip) % max_ccb;
-	hw = container_of(ip->i_cdev, struct ilo_hwinfo, cdev);
+	hw = container_of(fp->f_cdev, struct ilo_hwinfo, cdev[slot]);
 
 	spin_lock(&hw->open_lock);
 
@@ -571,7 +572,7 @@ static int ilo_open(struct inode *ip, struct file *fp)
 	unsigned long flags;
 
 	slot = iminor(ip) % max_ccb;
-	hw = container_of(ip->i_cdev, struct ilo_hwinfo, cdev);
+	hw = container_of(fp->f_cdev, struct ilo_hwinfo, cdev[slot]);
 
 	/* new ccb allocation */
 	data = kzalloc(sizeof(*data), GFP_KERNEL);
@@ -683,9 +684,9 @@ static irqreturn_t ilo_isr(int irq, void *data)
 
 static void ilo_unmap_device(struct pci_dev *pdev, struct ilo_hwinfo *hw)
 {
-	pci_iounmap(pdev, hw->db_vaddr);
-	pci_iounmap(pdev, hw->ram_vaddr);
-	pci_iounmap(pdev, hw->mmio_vaddr);
+	hpilo_pci_iounmap(pdev, hw->db_vaddr);
+	hpilo_pci_iounmap(pdev, hw->ram_vaddr);
+	hpilo_pci_iounmap(pdev, hw->mmio_vaddr);
 }
 
 static int ilo_map_device(struct pci_dev *pdev, struct ilo_hwinfo *hw)
@@ -696,7 +697,7 @@ static int ilo_map_device(struct pci_dev *pdev, struct ilo_hwinfo *hw)
 	int rc;
 
 	/* map the memory mapped i/o registers */
-	hw->mmio_vaddr = pci_iomap(pdev, 1, 0);
+	hw->mmio_vaddr = hpilo_pci_iomap(pdev, 1, 0);
 	if (hw->mmio_vaddr == NULL) {
 		dev_err(&pdev->dev, "Error mapping mmio\n");
 		goto out;
@@ -724,7 +725,7 @@ static int ilo_map_device(struct pci_dev *pdev, struct ilo_hwinfo *hw)
 	}
 
 	/* map the doorbell aperture */
-	hw->db_vaddr = pci_iomap(pdev, 3, max_ccb * ONE_DB_SIZE);
+	hw->db_vaddr = hpilo_pci_iomap(pdev, 3, max_ccb * ONE_DB_SIZE);
 	if (hw->db_vaddr == NULL) {
 		dev_err(&pdev->dev, "Error mapping doorbell\n");
 		goto ram_free;
@@ -732,28 +733,40 @@ static int ilo_map_device(struct pci_dev *pdev, struct ilo_hwinfo *hw)
 
 	return 0;
 ram_free:
-	pci_iounmap(pdev, hw->ram_vaddr);
+	hpilo_pci_iounmap(pdev, hw->ram_vaddr);
 mmio_free:
-	pci_iounmap(pdev, hw->mmio_vaddr);
+	hpilo_pci_iounmap(pdev, hw->mmio_vaddr);
 out:
 	return -ENOMEM;
 }
 
+static void
+hpilo_remove_cdevs(struct ilo_hwinfo *ilo_hw)
+{
+	struct cdev *cdev;
+	int minor;
+
+	for (minor = 0 ; minor < max_ccb; minor++) {
+		cdev = &ilo_hw->cdev[minor];
+		if (!cdev->dev)
+			continue;
+		cdev_del(cdev);
+	}
+}
+
 static void ilo_remove(struct pci_dev *pdev)
 {
-	int i, minor;
 	struct ilo_hwinfo *ilo_hw = pci_get_drvdata(pdev);
+	int devnum;
 
 	if (!ilo_hw)
 		return;
 
 	clear_device(ilo_hw);
 
-	minor = MINOR(ilo_hw->cdev.dev);
-	for (i = minor; i < minor + max_ccb; i++)
-		device_destroy(ilo_class, MKDEV(ilo_major, i));
+	devnum = MINOR(ilo_hw->cdev[0].dev) / max_ccb;
 
-	cdev_del(&ilo_hw->cdev);
+	hpilo_remove_cdevs(ilo_hw);
 	ilo_disable_interrupts(ilo_hw);
 	free_irq(pdev->irq, ilo_hw);
 	ilo_unmap_device(pdev, ilo_hw);
@@ -767,13 +780,49 @@ static void ilo_remove(struct pci_dev *pdev)
 	 * yet. See acpi_pci_link_free_irq called from acpi_pci_irq_disable.
 	 */
 	kfree(ilo_hw);
-	ilo_hwdev[(minor / max_ccb)] = 0;
+	ilo_hwdev[devnum] = 0;
+}
+
+static int
+hpilo_add_cdev(struct ilo_hwinfo *ilo_hw, int devnum, int minor)
+{
+	struct make_dev_args args;
+	struct cdev *cdev;
+	char buffer[32];
+	int error;
+
+	cdev = &ilo_hw->cdev[minor];
+	if (cdev->dev)
+		return -EALREADY;
+
+	cdev_init(cdev, &ilo_fops);
+	cdev->owner = THIS_MODULE;
+
+	cdev->dev = MKDEV(ilo_major, devnum * max_ccb + minor);
+
+	/* Setup arguments for make_dev_s() */
+	make_dev_args_init(&args);
+	args.mda_devsw = &linuxcdevsw;
+	args.mda_uid = 0;
+	args.mda_gid = 0;
+	args.mda_mode = 0700;
+	args.mda_si_drv1 = cdev;	/* linux_dev_fdopen() expects a cdev */
+
+	sprintf(buffer, "hpilo/d%dccb%d", devnum, minor);
+	error = hpilo_make_dev(&args, cdev, buffer);
+	if (error) {
+		cdev->dev = 0;
+		return -error;
+	}
+
+	kobject_get(cdev->kobj.parent);
+	return 0;
 }
 
 static int ilo_probe(struct pci_dev *pdev,
 			       const struct pci_device_id *ent)
 {
-	int devnum, minor, start, error = 0;
+	int devnum, minor, error = 0;
 	struct ilo_hwinfo *ilo_hw;
 
 	if (pci_match_id(ilo_blacklist, pdev)) {
@@ -833,26 +882,18 @@ static int ilo_probe(struct pci_dev *pdev,
 
 	ilo_enable_interrupts(ilo_hw);
 
-	cdev_init(&ilo_hw->cdev, &ilo_fops);
-	ilo_hw->cdev.owner = THIS_MODULE;
-	start = devnum * max_ccb;
-	error = cdev_add(&ilo_hw->cdev, MKDEV(ilo_major, start), max_ccb);
-	if (error) {
-		dev_err(&pdev->dev, "Could not add cdev\n");
-		goto remove_isr;
-	}
-
 	for (minor = 0 ; minor < max_ccb; minor++) {
-		struct device *dev;
-		dev = device_create(ilo_class, &pdev->dev,
-				    MKDEV(ilo_major, minor), NULL,
-				    "hpilo!d%dccb%d", devnum, minor);
-		if (IS_ERR(dev))
-			dev_err(&pdev->dev, "Could not create files\n");
+		error = hpilo_add_cdev(ilo_hw, devnum, minor);
+		if (error) {
+			dev_err(&pdev->dev, "Could not add cdev %d\n", minor);
+			goto remove_dev;
+		}
 	}
 
 	return 0;
-remove_isr:
+
+remove_dev:
+	hpilo_remove_cdevs(ilo_hw);
 	ilo_disable_interrupts(ilo_hw);
 	free_irq(pdev->irq, ilo_hw);
 unmap:
@@ -919,7 +960,7 @@ static void __exit ilo_exit(void)
 	class_destroy(ilo_class);
 }
 
-MODULE_VERSION("1.5.0");
+// MODULE_VERSION("1.5.0");
 MODULE_ALIAS(ILO_NAME);
 MODULE_DESCRIPTION(ILO_NAME);
 MODULE_AUTHOR("David Altobelli <david.altobelli@hp.com>");
